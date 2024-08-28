@@ -24,16 +24,21 @@ typedef struct device_state {
     queue_family present_queue;
 } device_state;
 
+typedef struct surface_state {
+    VkSurfaceKHR surface;
+    VkSurfaceCapabilitiesKHR capabilities;
+    VkFormat format;
+    VkColorSpaceKHR color_space;
+    VkPresentModeKHR present_mode;
+    VkExtent2D extent;
+} surface_state;
+
 typedef struct application_state {
     GLFWwindow* window;
     VkInstance instance;
     VkDebugUtilsMessengerEXT debug_messenger;
-    VkSurfaceKHR surface;
+    surface_state surface;
     device_state device;
-    VkSurfaceCapabilitiesKHR surface_capabilities;
-    VkSurfaceFormatKHR surface_format;
-    VkPresentModeKHR present_mode;
-    VkExtent2D extent;
     VkSwapchainKHR swapchain;
     VkImage* swapchain_images;
     VkImageView* swapchain_image_views;
@@ -146,7 +151,7 @@ void create_instance(application_state* state)
 
 void create_surface(application_state* state)
 {
-    if (glfwCreateWindowSurface(state->instance, state->window, NULL, &state->surface) != VK_SUCCESS) {
+    if (glfwCreateWindowSurface(state->instance, state->window, NULL, &state->surface.surface) != VK_SUCCESS) {
         fprintf(stderr, "failed to create surface\n");
     }
 }
@@ -183,7 +188,7 @@ bool physical_device_suitable(VkPhysicalDevice device, application_state* state)
         }
 
         VkBool32 present_supported = VK_FALSE;
-        vkGetPhysicalDeviceSurfaceSupportKHR(device, i, state->surface, &present_supported);
+        vkGetPhysicalDeviceSurfaceSupportKHR(device, i, state->surface.surface, &present_supported);
         if (present_supported == VK_TRUE) {
             present_queue_available = true;
         }
@@ -196,14 +201,14 @@ bool physical_device_suitable(VkPhysicalDevice device, application_state* state)
     }
 
     unsigned int format_count = 0;
-    vkGetPhysicalDeviceSurfaceFormatsKHR(device, state->surface, &format_count, NULL);
+    vkGetPhysicalDeviceSurfaceFormatsKHR(device, state->surface.surface, &format_count, NULL);
 
     if (format_count == 0) {
         return false;
     }
 
     unsigned int present_mode_count = 0;
-    vkGetPhysicalDeviceSurfacePresentModesKHR(device, state->surface, &present_mode_count, NULL);
+    vkGetPhysicalDeviceSurfacePresentModesKHR(device, state->surface.surface, &present_mode_count, NULL);
 
     if (present_mode_count == 0) {
         return false;
@@ -253,7 +258,7 @@ void pick_physical_device(application_state* state)
         }
 
         VkBool32 present_supported = VK_FALSE;
-        vkGetPhysicalDeviceSurfaceSupportKHR(state->device.physical_device, i, state->surface, &present_supported);
+        vkGetPhysicalDeviceSurfaceSupportKHR(state->device.physical_device, i, state->surface.surface, &present_supported);
         if (present_supported == VK_TRUE) {
             state->device.present_queue.index = i;
             present_queue_found = true;
@@ -376,81 +381,88 @@ void create_device(application_state* state)
     vkGetDeviceQueue(state->device.device, state->device.present_queue.index, 0, &state->device.present_queue.queue);
 }
 
-void create_swapchain(application_state* state)
+void query_surface_capabilities(application_state* state)
 {
     unsigned int format_count = 0;
-    vkGetPhysicalDeviceSurfaceFormatsKHR(state->device.physical_device, state->surface, &format_count, NULL);
+    vkGetPhysicalDeviceSurfaceFormatsKHR(state->device.physical_device, state->surface.surface, &format_count, NULL);
     VkSurfaceFormatKHR* surface_formats = (VkSurfaceFormatKHR*)calloc(format_count, sizeof(VkSurfaceFormatKHR));
-    vkGetPhysicalDeviceSurfaceFormatsKHR(state->device.physical_device, state->surface, &format_count, surface_formats);
+    vkGetPhysicalDeviceSurfaceFormatsKHR(state->device.physical_device, state->surface.surface, &format_count, surface_formats);
 
     bool preferred_format = false;
     for (unsigned int i = 0; i < format_count; ++i) {
         if (surface_formats[i].format == VK_FORMAT_B8G8R8A8_SRGB && surface_formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-            state->surface_format = surface_formats[i];
+            state->surface.format = surface_formats[i].format;
+            state->surface.color_space = surface_formats[i].colorSpace;
             preferred_format = true;
             break;
         }
     }
 
     if (!preferred_format) {
-        state->surface_format = surface_formats[0];
+        state->surface.format = surface_formats[0].format;
+        state->surface.color_space = surface_formats[0].colorSpace;
     }
 
     free(surface_formats);
 
     unsigned int present_mode_count = 0;
-    vkGetPhysicalDeviceSurfacePresentModesKHR(state->device.physical_device, state->surface, &present_mode_count, NULL);
+    vkGetPhysicalDeviceSurfacePresentModesKHR(state->device.physical_device, state->surface.surface, &present_mode_count, NULL);
     VkPresentModeKHR* present_modes = (VkPresentModeKHR*)calloc(present_mode_count, sizeof(VkPresentModeKHR));
-    vkGetPhysicalDeviceSurfacePresentModesKHR(state->device.physical_device, state->surface, &present_mode_count, present_modes);
+    vkGetPhysicalDeviceSurfacePresentModesKHR(state->device.physical_device, state->surface.surface, &present_mode_count, present_modes);
 
     bool preferred_present_mode = false;
     for (unsigned int i = 0; i < present_mode_count; ++i) {
         if (present_modes[i] == VK_PRESENT_MODE_MAILBOX_KHR) {
-            state->present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
+            state->surface.present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
             preferred_present_mode = true;
             break;
         }
     }
 
     if (!preferred_present_mode) {
-        state->present_mode = VK_PRESENT_MODE_FIFO_KHR;
+        state->surface.present_mode = VK_PRESENT_MODE_FIFO_KHR;
     }
 
     free(present_modes);
 
-    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(state->device.physical_device, state->surface, &state->surface_capabilities);
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(state->device.physical_device, state->surface.surface, &state->surface.capabilities);
 
-    if (state->surface_capabilities.currentExtent.width != UINT32_MAX) {
-        state->extent = state->surface_capabilities.currentExtent;
+    if (state->surface.capabilities.currentExtent.width != UINT32_MAX) {
+        state->surface.extent = state->surface.capabilities.currentExtent;
     } else {
         unsigned int width;
         unsigned int height;
 
         glfwGetFramebufferSize(state->window, (int*)&width, (int*)&height);
 
-        width = width < state->surface_capabilities.minImageExtent.width ? state->surface_capabilities.minImageExtent.width : width;
-        width = width > state->surface_capabilities.maxImageExtent.width ? state->surface_capabilities.maxImageExtent.width : width;
+        width = width < state->surface.capabilities.minImageExtent.width ? state->surface.capabilities.minImageExtent.width : width;
+        width = width > state->surface.capabilities.maxImageExtent.width ? state->surface.capabilities.maxImageExtent.width : width;
 
-        height = height < state->surface_capabilities.minImageExtent.height ? state->surface_capabilities.minImageExtent.height : height;
-        height = height > state->surface_capabilities.maxImageExtent.height ? state->surface_capabilities.maxImageExtent.height : height;
+        height = height < state->surface.capabilities.minImageExtent.height ? state->surface.capabilities.minImageExtent.height : height;
+        height = height > state->surface.capabilities.maxImageExtent.height ? state->surface.capabilities.maxImageExtent.height : height;
 
-        state->extent = (VkExtent2D){ width, height };
+        state->surface.extent = (VkExtent2D){ width, height };
     }
+}
 
-    unsigned int image_count = state->surface_capabilities.minImageCount + 1;
-    if (state->surface_capabilities.maxImageCount > 0 && image_count > state->surface_capabilities.maxImageCount) {
-        image_count = state->surface_capabilities.maxImageCount;
+void create_swapchain(application_state* state)
+{
+    query_surface_capabilities(state);
+
+    unsigned int image_count = state->surface.capabilities.minImageCount + 1;
+    if (state->surface.capabilities.maxImageCount > 0 && image_count > state->surface.capabilities.maxImageCount) {
+        image_count = state->surface.capabilities.maxImageCount;
     }
 
     VkSwapchainCreateInfoKHR create_info;
     create_info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
     create_info.pNext = NULL;
     create_info.flags = 0;
-    create_info.surface = state->surface;
+    create_info.surface = state->surface.surface;
     create_info.minImageCount = image_count;
-    create_info.imageFormat = state->surface_format.format;
-    create_info.imageColorSpace = state->surface_format.colorSpace;
-    create_info.imageExtent = state->extent;
+    create_info.imageFormat = state->surface.format;
+    create_info.imageColorSpace = state->surface.color_space;
+    create_info.imageExtent = state->surface.extent;
     create_info.imageArrayLayers = 1;
     create_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
@@ -469,9 +481,9 @@ void create_swapchain(application_state* state)
         create_info.pQueueFamilyIndices = NULL;
     }
 
-    create_info.preTransform = state->surface_capabilities.currentTransform;
+    create_info.preTransform = state->surface.capabilities.currentTransform;
     create_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    create_info.presentMode = state->present_mode;
+    create_info.presentMode = state->surface.present_mode;
     create_info.clipped = VK_TRUE;
     create_info.oldSwapchain = VK_NULL_HANDLE;
 
@@ -491,7 +503,7 @@ void create_swapchain(application_state* state)
         image_view_info.flags = 0;
         image_view_info.image = state->swapchain_images[i];
         image_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        image_view_info.format = state->surface_format.format;
+        image_view_info.format = state->surface.format;
         image_view_info.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
         image_view_info.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
         image_view_info.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
@@ -547,7 +559,7 @@ void create_render_pass(application_state* state)
 {
     VkAttachmentDescription color_attachment;
     color_attachment.flags = 0;
-    color_attachment.format = state->surface_format.format;
+    color_attachment.format = state->surface.format;
     color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
     color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -666,14 +678,14 @@ void create_graphics_pipeline(application_state* state)
     VkViewport viewport;
     viewport.x = 0.0f;
     viewport.y = 0.0f;
-    viewport.width = state->extent.width;
-    viewport.height = state->extent.height;
+    viewport.width = state->surface.extent.width;
+    viewport.height = state->surface.extent.height;
     viewport.minDepth = 0.0f;
     viewport.maxDepth = 1.0f;
 
     VkRect2D scissor;
     scissor.offset = (VkOffset2D){0, 0};
-    scissor.extent = state->extent;
+    scissor.extent = state->surface.extent;
 
     VkPipelineViewportStateCreateInfo viewport_info;
     viewport_info.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
@@ -787,8 +799,8 @@ void create_framebuffers(application_state* state)
         create_info.renderPass = state->render_pass;
         create_info.attachmentCount = 1;
         create_info.pAttachments = &state->swapchain_image_views[i];
-        create_info.width = state->extent.width;
-        create_info.height = state->extent.height;
+        create_info.width = state->surface.extent.width;
+        create_info.height = state->surface.extent.height;
         create_info.layers = 1;
 
         if (vkCreateFramebuffer(state->device.device, &create_info, NULL, &state->framebuffers[i]) != VK_SUCCESS) {
@@ -869,7 +881,7 @@ void record_command_buffer(VkCommandBuffer command_buffer, unsigned int index, a
     render_pass_info.renderPass = state->render_pass;
     render_pass_info.framebuffer = state->framebuffers[index];
     render_pass_info.renderArea.offset = (VkOffset2D){0, 0};
-    render_pass_info.renderArea.extent = state->extent;
+    render_pass_info.renderArea.extent = state->surface.extent;
     render_pass_info.clearValueCount = 1;
     render_pass_info.pClearValues = &clear_color;
 
@@ -885,8 +897,8 @@ void record_command_buffer(VkCommandBuffer command_buffer, unsigned int index, a
     VkViewport viewport;
     viewport.x = 0.0f;
     viewport.y = 0.0f;
-    viewport.width = state->extent.width;
-    viewport.height = state->extent.height;
+    viewport.width = state->surface.extent.width;
+    viewport.height = state->surface.extent.height;
     viewport.minDepth = 0.0f;
     viewport.maxDepth = 1.0f;
 
@@ -894,7 +906,7 @@ void record_command_buffer(VkCommandBuffer command_buffer, unsigned int index, a
 
     VkRect2D scissor;
     scissor.offset = (VkOffset2D){0, 0};
-    scissor.extent = state->extent;
+    scissor.extent = state->surface.extent;
 
     vkCmdSetScissor(command_buffer, 0, 1, &scissor);
 
@@ -1181,7 +1193,7 @@ int main(void)
     free(state->swapchain_image_views);
     free(state->swapchain_images);
     vkDestroyDevice(state->device.device, NULL);
-    vkDestroySurfaceKHR(state->instance, state->surface, NULL);
+    vkDestroySurfaceKHR(state->instance, state->surface.surface, NULL);
 #ifndef NDEBUG
     vkDestroyDebugUtilsMessengerEXT(state->instance, state->debug_messenger, NULL);
 #endif
