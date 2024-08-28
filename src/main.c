@@ -33,20 +33,24 @@ typedef struct surface_state {
     VkExtent2D extent;
 } surface_state;
 
+typedef struct swapchain_state {
+    VkSwapchainKHR swapchain;
+    u32 image_count;
+    VkImage* images;
+    VkImageView* image_views;
+} swapchain_state;
+
 typedef struct application_state {
     GLFWwindow* window;
     VkInstance instance;
     VkDebugUtilsMessengerEXT debug_messenger;
     surface_state surface;
     device_state device;
-    VkSwapchainKHR swapchain;
-    VkImage* swapchain_images;
-    VkImageView* swapchain_image_views;
-    unsigned int swapchain_image_count;
+    swapchain_state swapchain;
     VkRenderPass render_pass;
+    VkFramebuffer* framebuffers;
     VkPipelineLayout pipeline_layout;
     VkPipeline pipeline;
-    VkFramebuffer* framebuffers;
     VkCommandPool command_pool;
     VkCommandBuffer* command_buffers;
     VkSemaphore* image_available_semaphores;
@@ -487,21 +491,21 @@ void create_swapchain(application_state* state)
     create_info.clipped = VK_TRUE;
     create_info.oldSwapchain = VK_NULL_HANDLE;
 
-    if (vkCreateSwapchainKHR(state->device.device, &create_info, NULL, &state->swapchain) != VK_SUCCESS) {
+    if (vkCreateSwapchainKHR(state->device.device, &create_info, NULL, &state->swapchain.swapchain) != VK_SUCCESS) {
         fprintf(stderr, "failed to create swapchain\n");
     }
 
-    vkGetSwapchainImagesKHR(state->device.device, state->swapchain, &image_count, NULL);
-    state->swapchain_images = (VkImage*)realloc(state->swapchain_images, sizeof(VkImage) * image_count);
-    vkGetSwapchainImagesKHR(state->device.device, state->swapchain, &image_count, state->swapchain_images);
+    vkGetSwapchainImagesKHR(state->device.device, state->swapchain.swapchain, &image_count, NULL);
+    state->swapchain.images = (VkImage*)realloc(state->swapchain.images, sizeof(VkImage) * image_count);
+    vkGetSwapchainImagesKHR(state->device.device, state->swapchain.swapchain, &image_count, state->swapchain.images);
 
-    state->swapchain_image_views = (VkImageView*)realloc(state->swapchain_image_views, sizeof(VkImageView) * image_count);
+    state->swapchain.image_views = (VkImageView*)realloc(state->swapchain.image_views, sizeof(VkImageView) * image_count);
     for (unsigned int i = 0; i < image_count; ++i) {
         VkImageViewCreateInfo image_view_info;
         image_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         image_view_info.pNext = NULL;
         image_view_info.flags = 0;
-        image_view_info.image = state->swapchain_images[i];
+        image_view_info.image = state->swapchain.images[i];
         image_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
         image_view_info.format = state->surface.format;
         image_view_info.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
@@ -514,12 +518,12 @@ void create_swapchain(application_state* state)
         image_view_info.subresourceRange.baseArrayLayer = 0;
         image_view_info.subresourceRange.layerCount = 1;
 
-        if (vkCreateImageView(state->device.device, &image_view_info, NULL, &state->swapchain_image_views[i]) != VK_SUCCESS) {
+        if (vkCreateImageView(state->device.device, &image_view_info, NULL, &state->swapchain.image_views[i]) != VK_SUCCESS) {
             fprintf(stderr, "failed to create image view, index %u\n", i);
         }
     }
 
-    state->swapchain_image_count = image_count;
+    state->swapchain.image_count = image_count;
 }
 
 VkShaderModule compile_shader_file(const char* filepath, application_state* state)
@@ -606,6 +610,28 @@ void create_render_pass(application_state* state)
 
     if (vkCreateRenderPass(state->device.device, &create_info, NULL, &state->render_pass) != VK_SUCCESS) {
         fprintf(stderr, "failed to create render pass\n");
+    }
+}
+
+void create_framebuffers(application_state* state)
+{
+    state->framebuffers = (VkFramebuffer*)realloc(state->framebuffers, sizeof(VkFramebuffer) * state->swapchain.image_count);
+
+    for (unsigned int i = 0; i < state->swapchain.image_count; ++i) {
+        VkFramebufferCreateInfo create_info;
+        create_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        create_info.pNext = NULL;
+        create_info.flags = 0;
+        create_info.renderPass = state->render_pass;
+        create_info.attachmentCount = 1;
+        create_info.pAttachments = &state->swapchain.image_views[i];
+        create_info.width = state->surface.extent.width;
+        create_info.height = state->surface.extent.height;
+        create_info.layers = 1;
+
+        if (vkCreateFramebuffer(state->device.device, &create_info, NULL, &state->framebuffers[i]) != VK_SUCCESS) {
+            fprintf(stderr, "failed to create framebuffer, index %u\n", i);
+        }
     }
 }
 
@@ -787,28 +813,6 @@ void create_graphics_pipeline(application_state* state)
     vkDestroyShaderModule(state->device.device, vert_module, NULL);
 }
 
-void create_framebuffers(application_state* state)
-{
-    state->framebuffers = (VkFramebuffer*)realloc(state->framebuffers, sizeof(VkFramebuffer) * state->swapchain_image_count);
-
-    for (unsigned int i = 0; i < state->swapchain_image_count; ++i) {
-        VkFramebufferCreateInfo create_info;
-        create_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        create_info.pNext = NULL;
-        create_info.flags = 0;
-        create_info.renderPass = state->render_pass;
-        create_info.attachmentCount = 1;
-        create_info.pAttachments = &state->swapchain_image_views[i];
-        create_info.width = state->surface.extent.width;
-        create_info.height = state->surface.extent.height;
-        create_info.layers = 1;
-
-        if (vkCreateFramebuffer(state->device.device, &create_info, NULL, &state->framebuffers[i]) != VK_SUCCESS) {
-            fprintf(stderr, "failed to create framebuffer, index %u\n", i);
-        }
-    }
-}
-
 void create_command_pool(application_state* state)
 {
     VkCommandPoolCreateInfo pool_info;
@@ -924,7 +928,7 @@ void draw_frame(application_state* state)
     vkWaitForFences(state->device.device, 1, &state->in_flight_fences[state->current_frame], VK_TRUE, UINT64_MAX);
 
     unsigned int image_index;
-    VkResult result = vkAcquireNextImageKHR(state->device.device, state->swapchain, UINT64_MAX, state->image_available_semaphores[state->current_frame], VK_NULL_HANDLE, &image_index);
+    VkResult result = vkAcquireNextImageKHR(state->device.device, state->swapchain.swapchain, UINT64_MAX, state->image_available_semaphores[state->current_frame], VK_NULL_HANDLE, &image_index);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
         recreate_swapchain(state);
@@ -957,7 +961,7 @@ void draw_frame(application_state* state)
         fprintf(stderr, "failed to submit draw command buffer\n");
     }
 
-    VkSwapchainKHR swapchains[] = {state->swapchain};
+    VkSwapchainKHR swapchains[] = {state->swapchain.swapchain};
 
     VkPresentInfoKHR present_info;
     present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -985,20 +989,20 @@ void recreate_swapchain(application_state* state)
 {
     vkDeviceWaitIdle(state->device.device);
 
-    for (unsigned int i = 0; i < state->swapchain_image_count; ++i) {
-        vkDestroyFramebuffer(state->device.device, state->framebuffers[i], NULL);
-    }
-
     vkDestroyPipeline(state->device.device, state->pipeline, NULL);
     vkDestroyPipelineLayout(state->device.device, state->pipeline_layout, NULL);
 
-    vkDestroyRenderPass(state->device.device, state->render_pass, NULL);
-
-    for (unsigned int i = 0; i < state->swapchain_image_count; ++i) {
-        vkDestroyImageView(state->device.device, state->swapchain_image_views[i], NULL);
+    for (unsigned int i = 0; i < state->swapchain.image_count; ++i) {
+        vkDestroyFramebuffer(state->device.device, state->framebuffers[i], NULL);
     }
 
-    vkDestroySwapchainKHR(state->device.device, state->swapchain, NULL);
+    vkDestroyRenderPass(state->device.device, state->render_pass, NULL);
+
+    for (unsigned int i = 0; i < state->swapchain.image_count; ++i) {
+        vkDestroyImageView(state->device.device, state->swapchain.image_views[i], NULL);
+    }
+
+    vkDestroySwapchainKHR(state->device.device, state->swapchain.swapchain, NULL);
 
     create_swapchain(state);
     create_render_pass(state);
@@ -1153,8 +1157,8 @@ int main(void)
     create_device(state);
     create_swapchain(state);
     create_render_pass(state);
-    create_graphics_pipeline(state);
     create_framebuffers(state);
+    create_graphics_pipeline(state);
     create_command_pool(state);
     allocate_command_buffer(state);
     create_sync_objects(state);
@@ -1169,6 +1173,7 @@ int main(void)
 
     vkDestroyBuffer(state->device.device, state->vertex_buffer, NULL);
     vkFreeMemory(state->device.device, state->vertex_buffer_memory, NULL);
+
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
         vkDestroyFence(state->device.device, state->in_flight_fences[i], NULL);
         vkDestroySemaphore(state->device.device, state->render_finished_semaphores[i], NULL);
@@ -1177,23 +1182,31 @@ int main(void)
     free(state->in_flight_fences);
     free(state->render_finished_semaphores);
     free(state->image_available_semaphores);
+
     vkDestroyCommandPool(state->device.device, state->command_pool, NULL);
     free(state->command_buffers);
-    for (unsigned int i = 0; i < state->swapchain_image_count; ++i) {
+
+    vkDestroyPipeline(state->device.device, state->pipeline, NULL);
+    vkDestroyPipelineLayout(state->device.device, state->pipeline_layout, NULL);
+
+    for (unsigned int i = 0; i < state->swapchain.image_count; ++i) {
         vkDestroyFramebuffer(state->device.device, state->framebuffers[i], NULL);
     }
     free(state->framebuffers);
-    vkDestroyPipeline(state->device.device, state->pipeline, NULL);
-    vkDestroyPipelineLayout(state->device.device, state->pipeline_layout, NULL);
+
     vkDestroyRenderPass(state->device.device, state->render_pass, NULL);
-    for (unsigned int i = 0; i < state->swapchain_image_count; ++i) {
-        vkDestroyImageView(state->device.device, state->swapchain_image_views[i], NULL);
+
+    for (unsigned int i = 0; i < state->swapchain.image_count; ++i) {
+        vkDestroyImageView(state->device.device, state->swapchain.image_views[i], NULL);
     }
-    vkDestroySwapchainKHR(state->device.device, state->swapchain, NULL);
-    free(state->swapchain_image_views);
-    free(state->swapchain_images);
+    vkDestroySwapchainKHR(state->device.device, state->swapchain.swapchain, NULL);
+    free(state->swapchain.image_views);
+    free(state->swapchain.images);
+
     vkDestroyDevice(state->device.device, NULL);
+
     vkDestroySurfaceKHR(state->instance, state->surface.surface, NULL);
+
 #ifndef NDEBUG
     vkDestroyDebugUtilsMessengerEXT(state->instance, state->debug_messenger, NULL);
 #endif
