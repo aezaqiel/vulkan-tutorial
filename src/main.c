@@ -7,11 +7,6 @@
 
 #define MAX_FRAMES_IN_FLIGHT 2
 
-typedef struct vertex {
-    vec2 position;
-    vec3 color;
-} vertex;
-
 typedef struct queue_family {
     VkQueue queue;
     unsigned char index;
@@ -50,6 +45,11 @@ typedef struct buffer {
     VkDeviceMemory memory;
 } buffer;
 
+typedef struct vertex {
+    vec2 position;
+    vec3 color;
+} vertex;
+
 typedef struct application_state {
     GLFWwindow* window;
     VkInstance instance;
@@ -68,6 +68,7 @@ typedef struct application_state {
     unsigned char current_frame;
     bool framebuffer_resized;
     buffer vertex_buffer;
+    buffer index_buffer;
 } application_state;
 
 static void glfw_error_callback(int code, const char* description)
@@ -920,6 +921,7 @@ void record_command_buffer(VkCommandBuffer command_buffer, unsigned int index, a
     VkDeviceSize offsets[] = {0};
 
     vkCmdBindVertexBuffers(command_buffer, 0, 1, vertex_buffers, offsets);
+    vkCmdBindIndexBuffer(command_buffer, state->index_buffer.buffer, 0, VK_INDEX_TYPE_UINT16);
 
     VkViewport viewport;
     viewport.x = 0.0f;
@@ -937,7 +939,8 @@ void record_command_buffer(VkCommandBuffer command_buffer, unsigned int index, a
 
     vkCmdSetScissor(command_buffer, 0, 1, &scissor);
 
-    vkCmdDraw(command_buffer, 3, 1, 0, 0);
+    // TODO: remove hardcoded 6 index count
+    vkCmdDrawIndexed(command_buffer, 6, 1, 0, 0, 0);
 
     vkCmdEndRenderPass(command_buffer);
 
@@ -1121,27 +1124,28 @@ void copy_buffer(application_state* state, VkBuffer src_buffer, VkBuffer dst_buf
 
 void create_vertex_buffer(application_state* state)
 {
-    vertex vertices[] = {
-        {{ 0.0f, -0.5f}, {0.8f, 0.2f, 0.2f}},
-        {{ 0.5f,  0.5f}, {0.2f, 0.8f, 0.2f}},
-        {{-0.5f,  0.5f}, {0.2f, 0.2f, 0.8f}}
+    const vertex vertices[] = {
+        {{-1.0f, -1.0f}, {0.8f, 0.2f, 0.2f}},
+        {{ 1.0f, -1.0f}, {0.2f, 0.8f, 0.2f}},
+        {{ 1.0f,  1.0f}, {0.2f, 0.2f, 0.8f}},
+        {{-1.0f,  1.0f}, {0.8f, 0.8f, 0.8f}}
     };
 
-    VkDeviceSize vertices_size = sizeof(vertices[0]) * (sizeof(vertices) / sizeof(vertices[0]));
+    VkDeviceSize buffer_size = sizeof(vertices[0]) * (sizeof(vertices) / sizeof(vertices[0]));
 
     VkBuffer staging_buffer;
     VkDeviceMemory staging_buffer_memory;
 
-    create_buffer(state, vertices_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer, &staging_buffer_memory);
+    create_buffer(state, buffer_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer, &staging_buffer_memory);
 
     void* data;
-    vkMapMemory(state->device.device, staging_buffer_memory, 0, vertices_size, 0, &data);
-    memcpy(data, vertices, vertices_size);
+    vkMapMemory(state->device.device, staging_buffer_memory, 0, buffer_size, 0, &data);
+    memcpy(data, vertices, buffer_size);
     vkUnmapMemory(state->device.device, staging_buffer_memory);
 
-    create_buffer(state, vertices_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &state->vertex_buffer.buffer, &state->vertex_buffer.memory);
+    create_buffer(state, buffer_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &state->vertex_buffer.buffer, &state->vertex_buffer.memory);
 
-    copy_buffer(state, staging_buffer, state->vertex_buffer.buffer, vertices_size);
+    copy_buffer(state, staging_buffer, state->vertex_buffer.buffer, buffer_size);
 
     vkDestroyBuffer(state->device.device, staging_buffer, NULL);
     vkFreeMemory(state->device.device, staging_buffer_memory, NULL);
@@ -1151,6 +1155,36 @@ void destroy_vertex_buffer(application_state* state)
 {
     vkDestroyBuffer(state->device.device, state->vertex_buffer.buffer, NULL);
     vkFreeMemory(state->device.device, state->vertex_buffer.memory, NULL);
+}
+
+void create_index_buffer(application_state* state)
+{
+    const u16 indices[] = { 0, 1, 2, 2, 3, 0 };
+
+    VkDeviceSize buffer_size = sizeof(indices[0]) * (sizeof(indices) / sizeof(indices[0]));
+
+    VkBuffer staging_buffer;
+    VkDeviceMemory staging_buffer_memory;
+
+    create_buffer(state, buffer_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer, &staging_buffer_memory);
+
+    void* data;
+    vkMapMemory(state->device.device, staging_buffer_memory, 0, buffer_size, 0, &data);
+    memcpy(data, indices, buffer_size);
+    vkUnmapMemory(state->device.device, staging_buffer_memory);
+
+    create_buffer(state, buffer_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &state->index_buffer.buffer, &state->index_buffer.memory);
+
+    copy_buffer(state, staging_buffer, state->index_buffer.buffer, buffer_size);
+
+    vkDestroyBuffer(state->device.device, staging_buffer, NULL);
+    vkFreeMemory(state->device.device, staging_buffer_memory, NULL);
+}
+
+void destroy_index_buffer(application_state* state)
+{
+    vkDestroyBuffer(state->device.device, state->index_buffer.buffer, NULL);
+    vkFreeMemory(state->device.device, state->index_buffer.memory, NULL);
 }
 
 int main(void)
@@ -1177,6 +1211,7 @@ int main(void)
     allocate_command_buffer(state);
     create_sync_objects(state);
     create_vertex_buffer(state);
+    create_index_buffer(state);
 
     while (!glfwWindowShouldClose(state->window)) {
         glfwPollEvents();
@@ -1185,6 +1220,7 @@ int main(void)
 
     vkDeviceWaitIdle(state->device.device);
 
+    destroy_index_buffer(state);
     destroy_vertex_buffer(state);
     destroy_sync_objects(state);
     destroy_command_pool(state);
