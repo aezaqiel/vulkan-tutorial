@@ -40,6 +40,11 @@ typedef struct swapchain_state {
     VkImageView* image_views;
 } swapchain_state;
 
+typedef struct pipeline_state {
+    VkPipelineLayout layout;
+    VkPipeline pipeline;
+} pipeline_state;
+
 typedef struct application_state {
     GLFWwindow* window;
     VkInstance instance;
@@ -49,8 +54,7 @@ typedef struct application_state {
     swapchain_state swapchain;
     VkRenderPass render_pass;
     VkFramebuffer* framebuffers;
-    VkPipelineLayout pipeline_layout;
-    VkPipeline pipeline;
+    pipeline_state graphics_pipeline;
     VkCommandPool command_pool;
     VkCommandBuffer* command_buffers;
     VkSemaphore* image_available_semaphores;
@@ -780,7 +784,7 @@ void create_graphics_pipeline(application_state* state)
     layout_info.pushConstantRangeCount = 0;
     layout_info.pPushConstantRanges = NULL;
 
-    if (vkCreatePipelineLayout(state->device.device, &layout_info, NULL, &state->pipeline_layout) != VK_SUCCESS) {
+    if (vkCreatePipelineLayout(state->device.device, &layout_info, NULL, &state->graphics_pipeline.layout) != VK_SUCCESS) {
         fprintf(stderr, "failed to create pipeline layout\n");
     }
 
@@ -799,13 +803,13 @@ void create_graphics_pipeline(application_state* state)
     pipeline_info.pDepthStencilState = NULL;
     pipeline_info.pColorBlendState = &color_blend_info;
     pipeline_info.pDynamicState = &dynamic_state_info;
-    pipeline_info.layout = state->pipeline_layout;
+    pipeline_info.layout = state->graphics_pipeline.layout;
     pipeline_info.renderPass = state->render_pass;
     pipeline_info.subpass = 0;
     pipeline_info.basePipelineHandle = VK_NULL_HANDLE;
     pipeline_info.basePipelineIndex = -1;
 
-    if (vkCreateGraphicsPipelines(state->device.device, VK_NULL_HANDLE, 1, &pipeline_info, NULL, &state->pipeline) != VK_SUCCESS) {
+    if (vkCreateGraphicsPipelines(state->device.device, VK_NULL_HANDLE, 1, &pipeline_info, NULL, &state->graphics_pipeline.pipeline) != VK_SUCCESS) {
         fprintf(stderr, "failed to create graphics pipeline\n");
     }
 
@@ -891,7 +895,7 @@ void record_command_buffer(VkCommandBuffer command_buffer, unsigned int index, a
 
     vkCmdBeginRenderPass(command_buffer, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
 
-    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, state->pipeline);
+    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, state->graphics_pipeline.pipeline);
 
     VkBuffer vertex_buffers[] = {state->vertex_buffer};
     VkDeviceSize offsets[] = {0};
@@ -989,8 +993,8 @@ void recreate_swapchain(application_state* state)
 {
     vkDeviceWaitIdle(state->device.device);
 
-    vkDestroyPipeline(state->device.device, state->pipeline, NULL);
-    vkDestroyPipelineLayout(state->device.device, state->pipeline_layout, NULL);
+    vkDestroyPipeline(state->device.device, state->graphics_pipeline.pipeline, NULL);
+    vkDestroyPipelineLayout(state->device.device, state->graphics_pipeline.layout, NULL);
 
     for (unsigned int i = 0; i < state->swapchain.image_count; ++i) {
         vkDestroyFramebuffer(state->device.device, state->framebuffers[i], NULL);
@@ -1186,8 +1190,8 @@ int main(void)
     vkDestroyCommandPool(state->device.device, state->command_pool, NULL);
     free(state->command_buffers);
 
-    vkDestroyPipeline(state->device.device, state->pipeline, NULL);
-    vkDestroyPipelineLayout(state->device.device, state->pipeline_layout, NULL);
+    vkDestroyPipeline(state->device.device, state->graphics_pipeline.pipeline, NULL);
+    vkDestroyPipelineLayout(state->device.device, state->graphics_pipeline.layout, NULL);
 
     for (unsigned int i = 0; i < state->swapchain.image_count; ++i) {
         vkDestroyFramebuffer(state->device.device, state->framebuffers[i], NULL);
