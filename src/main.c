@@ -45,6 +45,11 @@ typedef struct pipeline_state {
     VkPipeline pipeline;
 } pipeline_state;
 
+typedef struct buffer {
+    VkBuffer buffer;
+    VkDeviceMemory memory;
+} buffer;
+
 typedef struct application_state {
     GLFWwindow* window;
     VkInstance instance;
@@ -62,8 +67,7 @@ typedef struct application_state {
     VkFence* in_flight_fences;
     unsigned char current_frame;
     bool framebuffer_resized;
-    VkBuffer vertex_buffer;
-    VkDeviceMemory vertex_buffer_memory;
+    buffer vertex_buffer;
 } application_state;
 
 static void glfw_error_callback(int code, const char* description)
@@ -912,7 +916,7 @@ void record_command_buffer(VkCommandBuffer command_buffer, unsigned int index, a
 
     vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, state->graphics_pipeline.pipeline);
 
-    VkBuffer vertex_buffers[] = {state->vertex_buffer};
+    VkBuffer vertex_buffers[] = {state->vertex_buffer.buffer};
     VkDeviceSize offsets[] = {0};
 
     vkCmdBindVertexBuffers(command_buffer, 0, 1, vertex_buffers, offsets);
@@ -1135,9 +1139,9 @@ void create_vertex_buffer(application_state* state)
     memcpy(data, vertices, vertices_size);
     vkUnmapMemory(state->device.device, staging_buffer_memory);
 
-    create_buffer(state, vertices_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &state->vertex_buffer, &state->vertex_buffer_memory);
+    create_buffer(state, vertices_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &state->vertex_buffer.buffer, &state->vertex_buffer.memory);
 
-    copy_buffer(state, staging_buffer, state->vertex_buffer, vertices_size);
+    copy_buffer(state, staging_buffer, state->vertex_buffer.buffer, vertices_size);
 
     vkDestroyBuffer(state->device.device, staging_buffer, NULL);
     vkFreeMemory(state->device.device, staging_buffer_memory, NULL);
@@ -1145,8 +1149,8 @@ void create_vertex_buffer(application_state* state)
 
 void destroy_vertex_buffer(application_state* state)
 {
-    vkDestroyBuffer(state->device.device, state->vertex_buffer, NULL);
-    vkFreeMemory(state->device.device, state->vertex_buffer_memory, NULL);
+    vkDestroyBuffer(state->device.device, state->vertex_buffer.buffer, NULL);
+    vkFreeMemory(state->device.device, state->vertex_buffer.memory, NULL);
 }
 
 int main(void)
