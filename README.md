@@ -1,3 +1,3 @@
 # vulkan-tutorial
 
-implementation of [vulkan-tutorial.com](https://vulkan-tutorial.com) in C.
+implementation of [vulkan-tutorial](https://vulkan-tutorial.com) in C.
