@@ -93,6 +93,16 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_messenger_callback(VkDebugUtilsMessa
 
 void recreate_swapchain(application_state* state);
 
+void initialize_window(application_state* state)
+{
+    glfwSetErrorCallback(glfw_error_callback);
+    glfwInit();
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    state->window = glfwCreateWindow(1280, 720, "vulkan tutorial", NULL, NULL);
+    glfwSetWindowUserPointer(state->window, state);
+    glfwSetFramebufferSizeCallback(state->window, glfw_framebuffer_resize_callback);
+}
+
 void create_instance(application_state* state)
 {
     VkApplicationInfo info;
@@ -1113,9 +1123,9 @@ void copy_buffer(application_state* state, VkBuffer src_buffer, VkBuffer dst_buf
 void create_vertex_buffer(application_state* state)
 {
     vertex vertices[] = {
-        {{ 0.0f, -0.5f}, {1.0f, 1.0f, 1.0f}},
-        {{ 0.5f,  0.5f}, {0.0f, 1.0f, 0.0f}},
-        {{-0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}}
+        {{ 0.0f, -0.5f}, {0.8f, 0.2f, 0.2f}},
+        {{ 0.5f,  0.5f}, {0.2f, 0.8f, 0.2f}},
+        {{-0.5f,  0.5f}, {0.2f, 0.2f, 0.8f}}
     };
 
     VkDeviceSize vertices_size = sizeof(vertices[0]) * (sizeof(vertices) / sizeof(vertices[0]));
@@ -1143,12 +1153,7 @@ int main(void)
     application_state* state = (application_state*)malloc(sizeof(application_state));
     state = memset(state, 0, sizeof(application_state));
 
-    glfwSetErrorCallback(glfw_error_callback);
-    glfwInit();
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    state->window = glfwCreateWindow(1280, 720, "vulkan tutorial", NULL, NULL);
-    glfwSetWindowUserPointer(state->window, state);
-    glfwSetFramebufferSizeCallback(state->window, glfw_framebuffer_resize_callback);
+    initialize_window(state);
 
     if (volkInitialize() != VK_SUCCESS) {
         fprintf(stderr, "failed to initialize vulkan loader\n");
