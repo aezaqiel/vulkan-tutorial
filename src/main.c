@@ -1,5 +1,8 @@
 #include "defines.h"
 
+// TODO: platform specific code (delta time)
+#include <windows.h>
+
 #include <volk.h>
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
@@ -50,6 +53,12 @@ typedef struct vertex {
     vec3 color;
 } vertex;
 
+typedef struct uniform_buffer_object {
+    mat4 model;
+    mat4 view;
+    mat4 projection;
+} uniform_buffer_object;
+
 typedef struct application_state {
     GLFWwindow* window;
     VkInstance instance;
@@ -59,6 +68,7 @@ typedef struct application_state {
     swapchain_state swapchain;
     VkRenderPass render_pass;
     VkFramebuffer* framebuffers;
+    VkDescriptorSetLayout descriptor_set_layout;
     pipeline_state graphics_pipeline;
     VkCommandPool command_pool;
     VkCommandBuffer* command_buffers;
@@ -69,6 +79,11 @@ typedef struct application_state {
     bool framebuffer_resized;
     buffer vertex_buffer;
     buffer index_buffer;
+    buffer* uniform_buffers;
+    void** uniform_buffers_mapped;
+    VkDescriptorPool descriptor_pool;
+    VkDescriptorSet* descriptor_sets;
+    LARGE_INTEGER last_time;
 } application_state;
 
 static void glfw_error_callback(int code, const char* description)
@@ -96,7 +111,10 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_messenger_callback(VkDebugUtilsMessa
     return VK_FALSE;
 }
 
+static LARGE_INTEGER clock_frequency;
+
 void recreate_swapchain(application_state* state);
+void update_uniform_buffer(application_state* state, u32 current_image, f32 dt);
 
 void initialize_window(application_state* state)
 {
@@ -639,10 +657,36 @@ void destroy_framebuffers(application_state* state)
     }
 }
 
+void create_descriptor_set_layout(application_state* state)
+{
+    VkDescriptorSetLayoutBinding ubo_layout_binding;
+    ubo_layout_binding.binding = 0;
+    ubo_layout_binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    ubo_layout_binding.descriptorCount = 1;
+    ubo_layout_binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    ubo_layout_binding.pImmutableSamplers = NULL;
+
+    VkDescriptorSetLayoutCreateInfo create_info;
+    create_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    create_info.pNext = NULL;
+    create_info.flags = 0;
+    create_info.bindingCount = 1;
+    create_info.pBindings = &ubo_layout_binding;
+
+    if (vkCreateDescriptorSetLayout(state->device.device, &create_info, NULL, &state->descriptor_set_layout) != VK_SUCCESS) {
+        fprintf(stderr, "failed to create descriptor set layout\n");
+    }
+}
+
+void destroy_descriptor_set_layout(application_state* state)
+{
+    vkDestroyDescriptorSetLayout(state->device.device, state->descriptor_set_layout, NULL);
+}
+
 void create_graphics_pipeline(application_state* state)
 {
-    VkShaderModule vert_module = compile_shader_file("shaders/triangle_buffer.vert.spv", state);
-    VkShaderModule frag_module = compile_shader_file("shaders/triangle_buffer.frag.spv", state);
+    VkShaderModule vert_module = compile_shader_file("shaders/shader.vert.spv", state);
+    VkShaderModule frag_module = compile_shader_file("shaders/shader.frag.spv", state);
 
     VkPipelineShaderStageCreateInfo shader_stages[2];
     shader_stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -734,7 +778,7 @@ void create_graphics_pipeline(application_state* state)
     rasterization_info.rasterizerDiscardEnable = VK_FALSE;
     rasterization_info.polygonMode = VK_POLYGON_MODE_FILL;
     rasterization_info.cullMode = VK_CULL_MODE_BACK_BIT;
-    rasterization_info.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    rasterization_info.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rasterization_info.depthBiasEnable = VK_FALSE;
     rasterization_info.depthBiasConstantFactor = 0.0f;
     rasterization_info.depthBiasClamp = 0.0f;
@@ -779,8 +823,8 @@ void create_graphics_pipeline(application_state* state)
     layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     layout_info.pNext = NULL;
     layout_info.flags = 0;
-    layout_info.setLayoutCount = 0;
-    layout_info.pSetLayouts = NULL;
+    layout_info.setLayoutCount = 1;
+    layout_info.pSetLayouts = &state->descriptor_set_layout;
     layout_info.pushConstantRangeCount = 0;
     layout_info.pPushConstantRanges = NULL;
 
@@ -939,6 +983,8 @@ void record_command_buffer(VkCommandBuffer command_buffer, unsigned int index, a
 
     vkCmdSetScissor(command_buffer, 0, 1, &scissor);
 
+    vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, state->graphics_pipeline.layout, 0, 1, &state->descriptor_sets[state->current_frame], 0, NULL);
+
     // TODO: remove hardcoded 6 index count
     vkCmdDrawIndexed(command_buffer, 6, 1, 0, 0, 0);
 
@@ -949,7 +995,7 @@ void record_command_buffer(VkCommandBuffer command_buffer, unsigned int index, a
     }
 }
 
-void draw_frame(application_state* state)
+void draw_frame(application_state* state, f32 dt)
 {
     vkWaitForFences(state->device.device, 1, &state->in_flight_fences[state->current_frame], VK_TRUE, UINT64_MAX);
 
@@ -971,6 +1017,8 @@ void draw_frame(application_state* state)
     VkSemaphore wait_semaphores[] = {state->image_available_semaphores[state->current_frame]};
     VkSemaphore signal_semaphores[] = {state->render_finished_semaphores[state->current_frame]};
     VkPipelineStageFlags wait_stages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+
+    update_uniform_buffer(state, state->current_frame, dt);
 
     VkSubmitInfo submit_info;
     submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -1187,10 +1235,114 @@ void destroy_index_buffer(application_state* state)
     vkFreeMemory(state->device.device, state->index_buffer.memory, NULL);
 }
 
+void create_uniform_buffers(application_state* state)
+{
+    VkDeviceSize buffer_size = sizeof(uniform_buffer_object);
+
+    state->uniform_buffers = (buffer*)calloc(MAX_FRAMES_IN_FLIGHT, sizeof(buffer));
+    state->uniform_buffers_mapped = (void**)calloc(MAX_FRAMES_IN_FLIGHT, sizeof(void*));
+
+    for (u32 i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        create_buffer(state, buffer_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &state->uniform_buffers[i].buffer, &state->uniform_buffers[i].memory);
+        vkMapMemory(state->device.device, state->uniform_buffers[i].memory, 0, buffer_size, 0, &state->uniform_buffers_mapped[i]);
+    }
+}
+
+void destroy_uniform_buffers(application_state* state)
+{
+    for (u32 i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        vkDestroyBuffer(state->device.device, state->uniform_buffers[i].buffer, NULL);
+        vkFreeMemory(state->device.device, state->uniform_buffers[i].memory, NULL);
+    }
+}
+
+void update_uniform_buffer(application_state* state, u32 current_image, f32 dt)
+{
+    uniform_buffer_object ubo;
+
+    glm_mat4_identity(ubo.model);
+    glm_rotate(ubo.model, dt * glm_rad(90.0f), (vec3){0.0f, 0.0f, 1.0f});
+
+    glm_lookat((vec3){2.0f, 2.0f, 2.0f}, (vec3){0.0f, 0.0f, 0.0f}, (vec3){0.0f, 0.0f, 1.0f}, ubo.view);
+
+    glm_perspective(glm_rad(45.0f), (float)state->surface.extent.width / (float)state->surface.extent.height, 0.1f, 10.0f, ubo.projection);
+    ubo.projection[1][1] *= -1;
+
+    memcpy(state->uniform_buffers_mapped[current_image], &ubo, sizeof(ubo));
+}
+
+void create_descriptor_pool(application_state* state)
+{
+    VkDescriptorPoolSize pool_size;
+    pool_size.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    pool_size.descriptorCount = MAX_FRAMES_IN_FLIGHT;
+
+    VkDescriptorPoolCreateInfo create_info;
+    create_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    create_info.pNext = NULL;
+    create_info.flags = 0;
+    create_info.maxSets = MAX_FRAMES_IN_FLIGHT;
+    create_info.poolSizeCount = 1;
+    create_info.pPoolSizes = &pool_size;
+
+    if (vkCreateDescriptorPool(state->device.device, &create_info, NULL, &state->descriptor_pool) != VK_SUCCESS) {
+        fprintf(stderr, "failed to create descriptor pool\n");
+    }
+}
+
+void destroy_descriptor_pool(application_state* state)
+{
+    vkDestroyDescriptorPool(state->device.device, state->descriptor_pool, NULL);
+}
+
+void createa_descriptor_sets(application_state* state)
+{
+    state->descriptor_sets = (VkDescriptorSet*)calloc(MAX_FRAMES_IN_FLIGHT, sizeof(VkDescriptorSet));
+
+    VkDescriptorSetLayout layouts[MAX_FRAMES_IN_FLIGHT];
+    for (u32 i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        layouts[i] = state->descriptor_set_layout;
+    }
+
+    VkDescriptorSetAllocateInfo allocate_info;
+    allocate_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocate_info.pNext = NULL;
+    allocate_info.descriptorPool = state->descriptor_pool;
+    allocate_info.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+    allocate_info.pSetLayouts = layouts;
+
+    if (vkAllocateDescriptorSets(state->device.device, &allocate_info, state->descriptor_sets) != VK_SUCCESS) {
+        fprintf(stderr, "failed to allocated descriptor sets\n");
+    }
+
+    for (u32 i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        VkDescriptorBufferInfo buffer_info;
+        buffer_info.buffer = state->uniform_buffers[i].buffer;
+        buffer_info.offset = 0;
+        buffer_info.range = sizeof(uniform_buffer_object);
+
+        VkWriteDescriptorSet descriptor_write;
+        descriptor_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptor_write.pNext = NULL;
+        descriptor_write.dstSet = state->descriptor_sets[i];
+        descriptor_write.dstBinding = 0;
+        descriptor_write.dstArrayElement = 0;
+        descriptor_write.descriptorCount = 1;
+        descriptor_write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptor_write.pImageInfo = NULL;
+        descriptor_write.pBufferInfo = &buffer_info;
+        descriptor_write.pTexelBufferView = NULL;
+
+        vkUpdateDescriptorSets(state->device.device, 1, &descriptor_write, 0, NULL);
+    }
+}
+
 int main(void)
 {
     application_state* state = (application_state*)malloc(sizeof(application_state));
     state = memset(state, 0, sizeof(application_state));
+
+    QueryPerformanceFrequency(&clock_frequency);
 
     initialize_window(state);
 
@@ -1206,25 +1358,43 @@ int main(void)
     create_swapchain(state);
     create_render_pass(state);
     create_framebuffers(state);
+    create_descriptor_set_layout(state);
     create_graphics_pipeline(state);
     create_command_pool(state);
     allocate_command_buffer(state);
     create_sync_objects(state);
     create_vertex_buffer(state);
     create_index_buffer(state);
+    create_uniform_buffers(state);
+    create_descriptor_pool(state);
+    createa_descriptor_sets(state);
+
+    QueryPerformanceCounter(&state->last_time);
 
     while (!glfwWindowShouldClose(state->window)) {
+        LARGE_INTEGER current_time;
+        QueryPerformanceCounter(&current_time);
+
+        f32 dt = (f32)(current_time.QuadPart - state->last_time.QuadPart) / clock_frequency.QuadPart;
+        state->last_time = current_time;
+
+        // printf("delta time: %f\n", dt);
+
         glfwPollEvents();
-        draw_frame(state);
+
+        draw_frame(state, dt);
     }
 
     vkDeviceWaitIdle(state->device.device);
 
+    destroy_descriptor_pool(state);
     destroy_index_buffer(state);
     destroy_vertex_buffer(state);
     destroy_sync_objects(state);
     destroy_command_pool(state);
     destroy_graphics_pipeline(state);
+    destroy_uniform_buffers(state);
+    destroy_descriptor_set_layout(state);
     destroy_framebuffers(state);
     destroy_render_pass(state);
     destroy_swapchain(state);
@@ -1232,6 +1402,9 @@ int main(void)
     destroy_surface(state);
     destroy_instance(state);
 
+    free(state->descriptor_sets);
+    free(state->uniform_buffers_mapped);
+    free(state->uniform_buffers);
     free(state->in_flight_fences);
     free(state->render_finished_semaphores);
     free(state->image_available_semaphores);
