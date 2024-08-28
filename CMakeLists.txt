@@ -45,6 +45,11 @@ if (WIN32)
     )
 endif()
 
+target_precompile_headers(${PROJECT_NAME}
+PRIVATE
+    src/defines.h
+)
+
 find_package(Vulkan REQUIRED COMPONENTS glslangValidator)
 
 file(GLOB_RECURSE GLSL_SOURCE_FILES
