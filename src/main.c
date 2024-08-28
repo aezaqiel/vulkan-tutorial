@@ -167,11 +167,25 @@ void create_instance(application_state* state)
 #endif
 }
 
+void destroy_instance(application_state* state)
+{
+#ifndef NDEBUG
+    vkDestroyDebugUtilsMessengerEXT(state->instance, state->debug_messenger, NULL);
+#endif
+
+    vkDestroyInstance(state->instance, NULL);
+}
+
 void create_surface(application_state* state)
 {
     if (glfwCreateWindowSurface(state->instance, state->window, NULL, &state->surface.surface) != VK_SUCCESS) {
         fprintf(stderr, "failed to create surface\n");
     }
+}
+
+void destroy_surface(application_state* state)
+{
+    vkDestroySurfaceKHR(state->instance, state->surface.surface, NULL);
 }
 
 bool physical_device_suitable(VkPhysicalDevice device, application_state* state)
@@ -313,62 +327,7 @@ void create_device(application_state* state)
         queue_infos[1].pQueuePriorities = queue_priority;
     }
 
-    VkPhysicalDeviceFeatures features;
-    features.robustBufferAccess = VK_FALSE;
-    features.fullDrawIndexUint32 = VK_FALSE;
-    features.imageCubeArray = VK_FALSE;
-    features.independentBlend = VK_FALSE;
-    features.geometryShader = VK_FALSE;
-    features.tessellationShader = VK_FALSE;
-    features.sampleRateShading = VK_FALSE;
-    features.dualSrcBlend = VK_FALSE;
-    features.logicOp = VK_FALSE;
-    features.multiDrawIndirect = VK_FALSE;
-    features.drawIndirectFirstInstance = VK_FALSE;
-    features.depthClamp = VK_FALSE;
-    features.depthBiasClamp = VK_FALSE;
-    features.fillModeNonSolid = VK_FALSE;
-    features.depthBounds = VK_FALSE;
-    features.wideLines = VK_FALSE;
-    features.largePoints = VK_FALSE;
-    features.alphaToOne = VK_FALSE;
-    features.multiViewport = VK_FALSE;
-    features.samplerAnisotropy = VK_FALSE;
-    features.textureCompressionETC2 = VK_FALSE;
-    features.textureCompressionASTC_LDR = VK_FALSE;
-    features.textureCompressionBC = VK_FALSE;
-    features.occlusionQueryPrecise = VK_FALSE;
-    features.pipelineStatisticsQuery = VK_FALSE;
-    features.vertexPipelineStoresAndAtomics = VK_FALSE;
-    features.fragmentStoresAndAtomics = VK_FALSE;
-    features.shaderTessellationAndGeometryPointSize = VK_FALSE;
-    features.shaderImageGatherExtended = VK_FALSE;
-    features.shaderStorageImageExtendedFormats = VK_FALSE;
-    features.shaderStorageImageMultisample = VK_FALSE;
-    features.shaderStorageImageReadWithoutFormat = VK_FALSE;
-    features.shaderStorageImageWriteWithoutFormat = VK_FALSE;
-    features.shaderUniformBufferArrayDynamicIndexing = VK_FALSE;
-    features.shaderSampledImageArrayDynamicIndexing = VK_FALSE;
-    features.shaderStorageBufferArrayDynamicIndexing = VK_FALSE;
-    features.shaderStorageImageArrayDynamicIndexing = VK_FALSE;
-    features.shaderClipDistance = VK_FALSE;
-    features.shaderCullDistance = VK_FALSE;
-    features.shaderFloat64 = VK_FALSE;
-    features.shaderInt64 = VK_FALSE;
-    features.shaderInt16 = VK_FALSE;
-    features.shaderResourceResidency = VK_FALSE;
-    features.shaderResourceMinLod = VK_FALSE;
-    features.sparseBinding = VK_FALSE;
-    features.sparseResidencyBuffer = VK_FALSE;
-    features.sparseResidencyImage2D = VK_FALSE;
-    features.sparseResidencyImage3D = VK_FALSE;
-    features.sparseResidency2Samples = VK_FALSE;
-    features.sparseResidency4Samples = VK_FALSE;
-    features.sparseResidency8Samples = VK_FALSE;
-    features.sparseResidency16Samples = VK_FALSE;
-    features.sparseResidencyAliased = VK_FALSE;
-    features.variableMultisampleRate = VK_FALSE;
-    features.inheritedQueries = VK_FALSE;
+    VkPhysicalDeviceFeatures features = {0};
 
     const char* extensions[] = {
         VK_KHR_SWAPCHAIN_EXTENSION_NAME,
@@ -397,6 +356,11 @@ void create_device(application_state* state)
 
     vkGetDeviceQueue(state->device.device, state->device.graphics_queue.index, 0, &state->device.graphics_queue.queue);
     vkGetDeviceQueue(state->device.device, state->device.present_queue.index, 0, &state->device.present_queue.queue);
+}
+
+void destroy_device(application_state* state)
+{
+    vkDestroyDevice(state->device.device, NULL);
 }
 
 void query_surface_capabilities(application_state* state)
@@ -540,6 +504,15 @@ void create_swapchain(application_state* state)
     state->swapchain.image_count = image_count;
 }
 
+void destroy_swapchain(application_state* state)
+{
+    for (unsigned int i = 0; i < state->swapchain.image_count; ++i) {
+        vkDestroyImageView(state->device.device, state->swapchain.image_views[i], NULL);
+    }
+
+    vkDestroySwapchainKHR(state->device.device, state->swapchain.swapchain, NULL);
+}
+
 VkShaderModule compile_shader_file(const char* filepath, application_state* state)
 {
     FILE* f;
@@ -627,6 +600,11 @@ void create_render_pass(application_state* state)
     }
 }
 
+void destroy_render_pass(application_state* state)
+{
+    vkDestroyRenderPass(state->device.device, state->render_pass, NULL);
+}
+
 void create_framebuffers(application_state* state)
 {
     state->framebuffers = (VkFramebuffer*)realloc(state->framebuffers, sizeof(VkFramebuffer) * state->swapchain.image_count);
@@ -646,6 +624,13 @@ void create_framebuffers(application_state* state)
         if (vkCreateFramebuffer(state->device.device, &create_info, NULL, &state->framebuffers[i]) != VK_SUCCESS) {
             fprintf(stderr, "failed to create framebuffer, index %u\n", i);
         }
+    }
+}
+
+void destroy_framebuffers(application_state* state)
+{
+    for (unsigned int i = 0; i < state->swapchain.image_count; ++i) {
+        vkDestroyFramebuffer(state->device.device, state->framebuffers[i], NULL);
     }
 }
 
@@ -827,6 +812,12 @@ void create_graphics_pipeline(application_state* state)
     vkDestroyShaderModule(state->device.device, vert_module, NULL);
 }
 
+void destroy_graphics_pipeline(application_state* state)
+{
+    vkDestroyPipeline(state->device.device, state->graphics_pipeline.pipeline, NULL);
+    vkDestroyPipelineLayout(state->device.device, state->graphics_pipeline.layout, NULL);
+}
+
 void create_command_pool(application_state* state)
 {
     VkCommandPoolCreateInfo pool_info;
@@ -838,6 +829,11 @@ void create_command_pool(application_state* state)
     if (vkCreateCommandPool(state->device.device, &pool_info, NULL, &state->command_pool) != VK_SUCCESS) {
         fprintf(stderr, "failed to create command pool\n");
     }
+}
+
+void destroy_command_pool(application_state* state)
+{
+    vkDestroyCommandPool(state->device.device, state->command_pool, NULL);
 }
 
 void allocate_command_buffer(application_state* state)
@@ -876,6 +872,15 @@ void create_sync_objects(application_state* state)
         vkCreateSemaphore(state->device.device, &semaphore_info, NULL, &state->image_available_semaphores[i]);
         vkCreateSemaphore(state->device.device, &semaphore_info, NULL, &state->render_finished_semaphores[i]);
         vkCreateFence(state->device.device, &fence_info, NULL, &state->in_flight_fences[i]);
+    }
+}
+
+void destroy_sync_objects(application_state* state)
+{
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        vkDestroyFence(state->device.device, state->in_flight_fences[i], NULL);
+        vkDestroySemaphore(state->device.device, state->render_finished_semaphores[i], NULL);
+        vkDestroySemaphore(state->device.device, state->image_available_semaphores[i], NULL);
     }
 }
 
@@ -1003,20 +1008,10 @@ void recreate_swapchain(application_state* state)
 {
     vkDeviceWaitIdle(state->device.device);
 
-    vkDestroyPipeline(state->device.device, state->graphics_pipeline.pipeline, NULL);
-    vkDestroyPipelineLayout(state->device.device, state->graphics_pipeline.layout, NULL);
-
-    for (unsigned int i = 0; i < state->swapchain.image_count; ++i) {
-        vkDestroyFramebuffer(state->device.device, state->framebuffers[i], NULL);
-    }
-
-    vkDestroyRenderPass(state->device.device, state->render_pass, NULL);
-
-    for (unsigned int i = 0; i < state->swapchain.image_count; ++i) {
-        vkDestroyImageView(state->device.device, state->swapchain.image_views[i], NULL);
-    }
-
-    vkDestroySwapchainKHR(state->device.device, state->swapchain.swapchain, NULL);
+    destroy_graphics_pipeline(state);
+    destroy_framebuffers(state);
+    destroy_render_pass(state);
+    destroy_swapchain(state);
 
     create_swapchain(state);
     create_render_pass(state);
@@ -1148,6 +1143,12 @@ void create_vertex_buffer(application_state* state)
     vkFreeMemory(state->device.device, staging_buffer_memory, NULL);
 }
 
+void destroy_vertex_buffer(application_state* state)
+{
+    vkDestroyBuffer(state->device.device, state->vertex_buffer, NULL);
+    vkFreeMemory(state->device.device, state->vertex_buffer_memory, NULL);
+}
+
 int main(void)
 {
     application_state* state = (application_state*)malloc(sizeof(application_state));
@@ -1180,46 +1181,24 @@ int main(void)
 
     vkDeviceWaitIdle(state->device.device);
 
-    vkDestroyBuffer(state->device.device, state->vertex_buffer, NULL);
-    vkFreeMemory(state->device.device, state->vertex_buffer_memory, NULL);
+    destroy_vertex_buffer(state);
+    destroy_sync_objects(state);
+    destroy_command_pool(state);
+    destroy_graphics_pipeline(state);
+    destroy_framebuffers(state);
+    destroy_render_pass(state);
+    destroy_swapchain(state);
+    destroy_device(state);
+    destroy_surface(state);
+    destroy_instance(state);
 
-    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        vkDestroyFence(state->device.device, state->in_flight_fences[i], NULL);
-        vkDestroySemaphore(state->device.device, state->render_finished_semaphores[i], NULL);
-        vkDestroySemaphore(state->device.device, state->image_available_semaphores[i], NULL);
-    }
     free(state->in_flight_fences);
     free(state->render_finished_semaphores);
     free(state->image_available_semaphores);
-
-    vkDestroyCommandPool(state->device.device, state->command_pool, NULL);
     free(state->command_buffers);
-
-    vkDestroyPipeline(state->device.device, state->graphics_pipeline.pipeline, NULL);
-    vkDestroyPipelineLayout(state->device.device, state->graphics_pipeline.layout, NULL);
-
-    for (unsigned int i = 0; i < state->swapchain.image_count; ++i) {
-        vkDestroyFramebuffer(state->device.device, state->framebuffers[i], NULL);
-    }
     free(state->framebuffers);
-
-    vkDestroyRenderPass(state->device.device, state->render_pass, NULL);
-
-    for (unsigned int i = 0; i < state->swapchain.image_count; ++i) {
-        vkDestroyImageView(state->device.device, state->swapchain.image_views[i], NULL);
-    }
-    vkDestroySwapchainKHR(state->device.device, state->swapchain.swapchain, NULL);
     free(state->swapchain.image_views);
     free(state->swapchain.images);
-
-    vkDestroyDevice(state->device.device, NULL);
-
-    vkDestroySurfaceKHR(state->instance, state->surface.surface, NULL);
-
-#ifndef NDEBUG
-    vkDestroyDebugUtilsMessengerEXT(state->instance, state->debug_messenger, NULL);
-#endif
-    vkDestroyInstance(state->instance, NULL);
 
     glfwDestroyWindow(state->window);
     glfwTerminate();
