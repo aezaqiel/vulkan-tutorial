@@ -7,3 +7,6 @@
 [submodule "vendor/volk"]
 	path = vendor/volk
 	url = https://github.com/zeux/volk
+[submodule "vendor/stb"]
+	path = vendor/stb
+	url = https://github.com/nothings/stb

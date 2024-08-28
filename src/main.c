@@ -8,6 +8,9 @@
 #include <GLFW/glfw3native.h>
 #include <cglm/cglm.h>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
 #define MAX_FRAMES_IN_FLIGHT 2
 
 typedef struct queue_family {
@@ -59,6 +62,11 @@ typedef struct uniform_buffer_object {
     mat4 projection;
 } uniform_buffer_object;
 
+typedef struct image {
+    VkImage image;
+    VkDeviceMemory memory;
+} image;
+
 typedef struct application_state {
     GLFWwindow* window;
     VkInstance instance;
@@ -83,6 +91,9 @@ typedef struct application_state {
     void** uniform_buffers_mapped;
     VkDescriptorPool descriptor_pool;
     VkDescriptorSet* descriptor_sets;
+    image texture_image;
+    VkImageView texture_image_view;
+    VkSampler texture_sampler;
     LARGE_INTEGER last_time;
 } application_state;
 
@@ -351,6 +362,7 @@ void create_device(application_state* state)
     }
 
     VkPhysicalDeviceFeatures features = {0};
+    features.samplerAnisotropy = VK_TRUE;
 
     const char* extensions[] = {
         VK_KHR_SWAPCHAIN_EXTENSION_NAME,
@@ -450,6 +462,33 @@ void query_surface_capabilities(application_state* state)
     }
 }
 
+VkImageView create_image_view(application_state* state, VkImage image, VkFormat format)
+{
+    VkImageViewCreateInfo create_info;
+    create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    create_info.pNext = NULL;
+    create_info.flags = 0;
+    create_info.image = image;
+    create_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    create_info.format = format;
+    create_info.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+    create_info.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+    create_info.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+    create_info.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+    create_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    create_info.subresourceRange.baseMipLevel = 0;
+    create_info.subresourceRange.levelCount = 1;
+    create_info.subresourceRange.baseArrayLayer = 0;
+    create_info.subresourceRange.layerCount = 1;
+
+    VkImageView image_view;
+    if (vkCreateImageView(state->device.device, &create_info, NULL, &image_view) != VK_SUCCESS) {
+        fprintf(stderr, "failed to create image view\n");
+    }
+
+    return image_view;
+}
+
 void create_swapchain(application_state* state)
 {
     query_surface_capabilities(state);
@@ -502,26 +541,7 @@ void create_swapchain(application_state* state)
 
     state->swapchain.image_views = (VkImageView*)realloc(state->swapchain.image_views, sizeof(VkImageView) * image_count);
     for (unsigned int i = 0; i < image_count; ++i) {
-        VkImageViewCreateInfo image_view_info;
-        image_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        image_view_info.pNext = NULL;
-        image_view_info.flags = 0;
-        image_view_info.image = state->swapchain.images[i];
-        image_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        image_view_info.format = state->surface.format;
-        image_view_info.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-        image_view_info.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-        image_view_info.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-        image_view_info.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-        image_view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        image_view_info.subresourceRange.baseMipLevel = 0;
-        image_view_info.subresourceRange.levelCount = 1;
-        image_view_info.subresourceRange.baseArrayLayer = 0;
-        image_view_info.subresourceRange.layerCount = 1;
-
-        if (vkCreateImageView(state->device.device, &image_view_info, NULL, &state->swapchain.image_views[i]) != VK_SUCCESS) {
-            fprintf(stderr, "failed to create image view, index %u\n", i);
-        }
+        state->swapchain.image_views[i] = create_image_view(state, state->swapchain.images[i], state->surface.format);
     }
 
     state->swapchain.image_count = image_count;
@@ -1124,7 +1144,7 @@ void create_buffer(application_state* state, VkDeviceSize size, VkBufferUsageFla
     vkBindBufferMemory(state->device.device, *buffer, *buffer_memory, 0);
 }
 
-void copy_buffer(application_state* state, VkBuffer src_buffer, VkBuffer dst_buffer, VkDeviceSize size)
+VkCommandBuffer begin_single_time_command(application_state* state)
 {
     VkCommandBufferAllocateInfo allocate_info;
     allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -1144,13 +1164,11 @@ void copy_buffer(application_state* state, VkBuffer src_buffer, VkBuffer dst_buf
 
     vkBeginCommandBuffer(command_buffer, &begin_info);
 
-    VkBufferCopy copy_region;
-    copy_region.srcOffset = 0;
-    copy_region.dstOffset = 0;
-    copy_region.size = size;
+    return command_buffer;
+}
 
-    vkCmdCopyBuffer(command_buffer, src_buffer, dst_buffer, 1, &copy_region);
-
+void end_single_time_command(application_state* state, VkCommandBuffer command_buffer)
+{
     vkEndCommandBuffer(command_buffer);
 
     VkSubmitInfo submit_info;
@@ -1168,6 +1186,207 @@ void copy_buffer(application_state* state, VkBuffer src_buffer, VkBuffer dst_buf
     vkQueueWaitIdle(state->device.graphics_queue.queue);
 
     vkFreeCommandBuffers(state->device.device, state->command_pool, 1, &command_buffer);
+}
+
+void copy_buffer(application_state* state, VkBuffer src_buffer, VkBuffer dst_buffer, VkDeviceSize size)
+{
+    VkCommandBuffer command_buffer = begin_single_time_command(state);
+
+    VkBufferCopy copy_region;
+    copy_region.srcOffset = 0;
+    copy_region.dstOffset = 0;
+    copy_region.size = size;
+
+    vkCmdCopyBuffer(command_buffer, src_buffer, dst_buffer, 1, &copy_region);
+
+    end_single_time_command(state, command_buffer);
+}
+
+void create_image(application_state* state, u32 width, u32 height, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage* img, VkDeviceMemory* img_memory)
+{
+    VkImageCreateInfo create_info;
+    create_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    create_info.pNext = NULL;
+    create_info.flags = 0;
+    create_info.imageType = VK_IMAGE_TYPE_2D;
+    create_info.format = format;
+    create_info.extent.width = width;
+    create_info.extent.height = height;
+    create_info.extent.depth = 1;
+    create_info.mipLevels = 1;
+    create_info.arrayLayers = 1;
+    create_info.samples = VK_SAMPLE_COUNT_1_BIT;
+    create_info.tiling = tiling;
+    create_info.usage = usage;
+    create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    create_info.queueFamilyIndexCount = 0;
+    create_info.pQueueFamilyIndices = NULL;
+    create_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    if (vkCreateImage(state->device.device, &create_info, NULL, img) != VK_SUCCESS) {
+        fprintf(stderr, "failed to create image\n");
+    }
+
+    VkMemoryRequirements memory_requirements;
+    vkGetImageMemoryRequirements(state->device.device, *img, &memory_requirements);
+
+    VkMemoryAllocateInfo allocate_info;
+    allocate_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocate_info.pNext = NULL;
+    allocate_info.allocationSize = memory_requirements.size;
+    allocate_info.memoryTypeIndex = find_memory_type(state, memory_requirements.memoryTypeBits, properties);
+
+    if (vkAllocateMemory(state->device.device, &allocate_info, NULL, img_memory) != VK_SUCCESS) {
+        fprintf(stderr, "failed to allocate image memory\n");
+    }
+
+    vkBindImageMemory(state->device.device, *img, *img_memory, 0);
+}
+
+void transition_image_layout(application_state* state, VkImage img, VkFormat format, VkImageLayout old_layout, VkImageLayout new_layout)
+{
+    VkCommandBuffer command_buffer = begin_single_time_command(state);
+
+    VkImageMemoryBarrier barrier;
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.pNext = NULL;
+    barrier.srcAccessMask = 0;
+    barrier.dstAccessMask = 0;
+    barrier.oldLayout = old_layout;
+    barrier.newLayout = new_layout;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = img;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+
+    VkPipelineStageFlags source_stage;
+    VkPipelineStageFlags destination_stage;
+
+    if (old_layout == VK_IMAGE_LAYOUT_UNDEFINED && new_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+        source_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        destination_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    } else if (old_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+        source_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        destination_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    } else {
+        fprintf(stderr, "unsupported layout transition\n");
+    }
+
+    vkCmdPipelineBarrier(command_buffer, source_stage, destination_stage, 0, 0, NULL, 0, NULL, 1, &barrier);
+
+    end_single_time_command(state, command_buffer);
+}
+
+void copy_buffer_to_image(application_state* state, VkBuffer buffer, VkImage img, u32 width, u32 height)
+{
+    VkCommandBuffer command_buffer = begin_single_time_command(state);
+
+    VkBufferImageCopy region;
+    region.bufferOffset = 0;
+    region.bufferRowLength = 0;
+    region.bufferImageHeight = 0;
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.mipLevel = 0;
+    region.imageSubresource.baseArrayLayer = 0;
+    region.imageSubresource.layerCount = 1;
+    region.imageOffset = (VkOffset3D){ 0, 0, 0 };
+    region.imageExtent = (VkExtent3D){ width, height, 1 };
+
+    vkCmdCopyBufferToImage(command_buffer, buffer, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+    end_single_time_command(state, command_buffer);
+}
+
+void create_texture_image(application_state* state)
+{
+    int tex_width;
+    int tex_height;
+    int tex_channels;
+
+    stbi_uc* pixels = stbi_load("../textures/texture.jpg", &tex_width, &tex_height, &tex_channels, STBI_rgb_alpha);
+
+    VkDeviceSize image_size = tex_width * tex_height * 4;
+
+    if (!pixels) {
+        fprintf(stderr, "failed to load image\n");
+        return;
+    }
+
+    VkBuffer staging_buffer;
+    VkDeviceMemory staging_buffer_memory;
+
+    create_buffer(state, image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &staging_buffer, &staging_buffer_memory);
+
+    void* data;
+    vkMapMemory(state->device.device, staging_buffer_memory, 0, image_size, 0, &data);
+    memcpy(data, pixels, image_size);
+    vkUnmapMemory(state->device.device, staging_buffer_memory);
+
+    stbi_image_free(pixels);
+
+    create_image(state, tex_width, tex_height, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &state->texture_image.image, &state->texture_image.memory);
+
+    transition_image_layout(state, state->texture_image.image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    copy_buffer_to_image(state, staging_buffer, state->texture_image.image, tex_width, tex_height);
+    transition_image_layout(state, state->texture_image.image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+    vkDestroyBuffer(state->device.device, staging_buffer, NULL);
+    vkFreeMemory(state->device.device, staging_buffer_memory, NULL);
+
+    state->texture_image_view = create_image_view(state, state->texture_image.image, VK_FORMAT_R8G8B8A8_SRGB);
+}
+
+void destroy_texture_image(application_state* state)
+{
+    vkDestroyImageView(state->device.device, state->texture_image_view, NULL);
+
+    vkDestroyImage(state->device.device, state->texture_image.image, NULL);
+    vkFreeMemory(state->device.device, state->texture_image.memory, NULL);
+}
+
+void create_texture_sampler(application_state* state)
+{
+    VkPhysicalDeviceProperties props;
+    vkGetPhysicalDeviceProperties(state->device.physical_device, &props);
+
+    VkSamplerCreateInfo create_info;
+    create_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    create_info.pNext = NULL;
+    create_info.flags = 0;
+    create_info.magFilter = VK_FILTER_LINEAR;
+    create_info.minFilter = VK_FILTER_LINEAR;
+    create_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    create_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    create_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    create_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    create_info.mipLodBias = 0.0f;
+    create_info.anisotropyEnable = VK_TRUE;
+    create_info.maxAnisotropy = props.limits.maxSamplerAnisotropy;
+    create_info.compareEnable = VK_FALSE;
+    create_info.compareOp = VK_COMPARE_OP_ALWAYS;
+    create_info.minLod = 0.0f;
+    create_info.maxLod = 0.0f;
+    create_info.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+    create_info.unnormalizedCoordinates = VK_FALSE;
+
+    if (vkCreateSampler(state->device.device, &create_info, NULL, &state->texture_sampler) != VK_SUCCESS) {
+        fprintf(stderr, "failed to create texture sampler\n");
+    }
+}
+
+void destroy_texture_sampler(application_state* state)
+{
+    vkDestroySampler(state->device.device, state->texture_sampler, NULL);
 }
 
 void create_vertex_buffer(application_state* state)
@@ -1363,6 +1582,8 @@ int main(void)
     create_command_pool(state);
     allocate_command_buffer(state);
     create_sync_objects(state);
+    create_texture_image(state);
+    create_texture_sampler(state);
     create_vertex_buffer(state);
     create_index_buffer(state);
     create_uniform_buffers(state);
@@ -1390,6 +1611,8 @@ int main(void)
     destroy_descriptor_pool(state);
     destroy_index_buffer(state);
     destroy_vertex_buffer(state);
+    destroy_texture_sampler(state);
+    destroy_texture_image(state);
     destroy_sync_objects(state);
     destroy_command_pool(state);
     destroy_graphics_pipeline(state);

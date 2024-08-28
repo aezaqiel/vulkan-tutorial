@@ -23,6 +23,7 @@ add_executable(${PROJECT_NAME} src/main.c)
 target_include_directories(${PROJECT_NAME}
 PRIVATE
     src
+    vendor/stb
 )
 
 target_link_libraries(${PROJECT_NAME}
