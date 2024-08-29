@@ -54,6 +54,7 @@ typedef struct buffer {
 typedef struct vertex {
     vec2 position;
     vec3 color;
+    vec2 tex_coord;
 } vertex;
 
 typedef struct uniform_buffer_object {
@@ -117,7 +118,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_messenger_callback(VkDebugUtilsMessa
     (void)message_type;
     (void)user_data;
 
-    fprintf(stderr, "%s", callback_data->pMessage);
+    fprintf(stderr, "%s\n", callback_data->pMessage);
 
     return VK_FALSE;
 }
@@ -686,12 +687,24 @@ void create_descriptor_set_layout(application_state* state)
     ubo_layout_binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     ubo_layout_binding.pImmutableSamplers = NULL;
 
+    VkDescriptorSetLayoutBinding sampler_layout_binding;
+    sampler_layout_binding.binding = 1;
+    sampler_layout_binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    sampler_layout_binding.descriptorCount = 1;
+    sampler_layout_binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    sampler_layout_binding.pImmutableSamplers = NULL;
+
+    VkDescriptorSetLayoutBinding bindings[2] = {
+        ubo_layout_binding,
+        sampler_layout_binding
+    };
+
     VkDescriptorSetLayoutCreateInfo create_info;
     create_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     create_info.pNext = NULL;
     create_info.flags = 0;
-    create_info.bindingCount = 1;
-    create_info.pBindings = &ubo_layout_binding;
+    create_info.bindingCount = sizeof(bindings) / sizeof(bindings[0]);
+    create_info.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(state->device.device, &create_info, NULL, &state->descriptor_set_layout) != VK_SUCCESS) {
         fprintf(stderr, "failed to create descriptor set layout\n");
@@ -737,7 +750,7 @@ void create_graphics_pipeline(application_state* state)
     dynamic_state_info.dynamicStateCount = sizeof(dynamic_states) / sizeof(dynamic_states[0]);
     dynamic_state_info.pDynamicStates = dynamic_states;
 
-    VkVertexInputAttributeDescription vertex_attributes_description[2];
+    VkVertexInputAttributeDescription vertex_attributes_description[3];
     vertex_attributes_description[0].location = 0;
     vertex_attributes_description[0].binding = 0;
     vertex_attributes_description[0].format = VK_FORMAT_R32G32_SFLOAT;
@@ -747,6 +760,11 @@ void create_graphics_pipeline(application_state* state)
     vertex_attributes_description[1].binding = 0;
     vertex_attributes_description[1].format = VK_FORMAT_R32G32B32_SFLOAT;
     vertex_attributes_description[1].offset = offsetof(vertex, color);
+
+    vertex_attributes_description[2].location = 2;
+    vertex_attributes_description[2].binding = 0;
+    vertex_attributes_description[2].format = VK_FORMAT_R32G32_SFLOAT;
+    vertex_attributes_description[2].offset = offsetof(vertex, tex_coord);
 
     VkVertexInputBindingDescription vertex_binding_description;
     vertex_binding_description.binding = 0;
@@ -1376,7 +1394,7 @@ void create_texture_sampler(application_state* state)
     create_info.compareOp = VK_COMPARE_OP_ALWAYS;
     create_info.minLod = 0.0f;
     create_info.maxLod = 0.0f;
-    create_info.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+    create_info.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
     create_info.unnormalizedCoordinates = VK_FALSE;
 
     if (vkCreateSampler(state->device.device, &create_info, NULL, &state->texture_sampler) != VK_SUCCESS) {
@@ -1392,10 +1410,10 @@ void destroy_texture_sampler(application_state* state)
 void create_vertex_buffer(application_state* state)
 {
     const vertex vertices[] = {
-        {{-1.0f, -1.0f}, {0.8f, 0.2f, 0.2f}},
-        {{ 1.0f, -1.0f}, {0.2f, 0.8f, 0.2f}},
-        {{ 1.0f,  1.0f}, {0.2f, 0.2f, 0.8f}},
-        {{-1.0f,  1.0f}, {0.8f, 0.8f, 0.8f}}
+        {{-1.0f, -1.0f}, {0.8f, 0.2f, 0.2f}, {1.0f, 0.0f}},
+        {{ 1.0f, -1.0f}, {0.2f, 0.8f, 0.2f}, {0.0f, 0.0f}},
+        {{ 1.0f,  1.0f}, {0.2f, 0.2f, 0.8f}, {0.0f, 1.0f}},
+        {{-1.0f,  1.0f}, {0.8f, 0.8f, 0.8f}, {1.0f, 1.0f}}
     };
 
     VkDeviceSize buffer_size = sizeof(vertices[0]) * (sizeof(vertices) / sizeof(vertices[0]));
@@ -1492,17 +1510,20 @@ void update_uniform_buffer(application_state* state, u32 current_image, f32 dt)
 
 void create_descriptor_pool(application_state* state)
 {
-    VkDescriptorPoolSize pool_size;
-    pool_size.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    pool_size.descriptorCount = MAX_FRAMES_IN_FLIGHT;
+    VkDescriptorPoolSize pool_size[2];
+    pool_size[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    pool_size[0].descriptorCount = MAX_FRAMES_IN_FLIGHT;
+
+    pool_size[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    pool_size[1].descriptorCount = MAX_FRAMES_IN_FLIGHT;
 
     VkDescriptorPoolCreateInfo create_info;
     create_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     create_info.pNext = NULL;
     create_info.flags = 0;
     create_info.maxSets = MAX_FRAMES_IN_FLIGHT;
-    create_info.poolSizeCount = 1;
-    create_info.pPoolSizes = &pool_size;
+    create_info.poolSizeCount = sizeof(pool_size) / sizeof(pool_size[0]);
+    create_info.pPoolSizes = pool_size;
 
     if (vkCreateDescriptorPool(state->device.device, &create_info, NULL, &state->descriptor_pool) != VK_SUCCESS) {
         fprintf(stderr, "failed to create descriptor pool\n");
@@ -1514,7 +1535,7 @@ void destroy_descriptor_pool(application_state* state)
     vkDestroyDescriptorPool(state->device.device, state->descriptor_pool, NULL);
 }
 
-void createa_descriptor_sets(application_state* state)
+void create_descriptor_sets(application_state* state)
 {
     state->descriptor_sets = (VkDescriptorSet*)calloc(MAX_FRAMES_IN_FLIGHT, sizeof(VkDescriptorSet));
 
@@ -1540,19 +1561,35 @@ void createa_descriptor_sets(application_state* state)
         buffer_info.offset = 0;
         buffer_info.range = sizeof(uniform_buffer_object);
 
-        VkWriteDescriptorSet descriptor_write;
-        descriptor_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptor_write.pNext = NULL;
-        descriptor_write.dstSet = state->descriptor_sets[i];
-        descriptor_write.dstBinding = 0;
-        descriptor_write.dstArrayElement = 0;
-        descriptor_write.descriptorCount = 1;
-        descriptor_write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        descriptor_write.pImageInfo = NULL;
-        descriptor_write.pBufferInfo = &buffer_info;
-        descriptor_write.pTexelBufferView = NULL;
+        VkDescriptorImageInfo image_info;
+        image_info.sampler = state->texture_sampler;
+        image_info.imageView = state->texture_image_view;
+        image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-        vkUpdateDescriptorSets(state->device.device, 1, &descriptor_write, 0, NULL);
+        VkWriteDescriptorSet descriptor_writes[2];
+        descriptor_writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptor_writes[0].pNext = NULL;
+        descriptor_writes[0].dstSet = state->descriptor_sets[i];
+        descriptor_writes[0].dstBinding = 0;
+        descriptor_writes[0].dstArrayElement = 0;
+        descriptor_writes[0].descriptorCount = 1;
+        descriptor_writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        descriptor_writes[0].pImageInfo = NULL;
+        descriptor_writes[0].pBufferInfo = &buffer_info;
+        descriptor_writes[0].pTexelBufferView = NULL;
+
+        descriptor_writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptor_writes[1].pNext = NULL;
+        descriptor_writes[1].dstSet = state->descriptor_sets[i];
+        descriptor_writes[1].dstBinding = 1;
+        descriptor_writes[1].dstArrayElement = 0;
+        descriptor_writes[1].descriptorCount = 1;
+        descriptor_writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        descriptor_writes[1].pImageInfo = &image_info;
+        descriptor_writes[1].pBufferInfo = NULL;
+        descriptor_writes[1].pTexelBufferView = NULL;
+
+        vkUpdateDescriptorSets(state->device.device, sizeof(descriptor_writes) / sizeof(descriptor_writes[0]), descriptor_writes, 0, NULL);
     }
 }
 
@@ -1588,7 +1625,7 @@ int main(void)
     create_index_buffer(state);
     create_uniform_buffers(state);
     create_descriptor_pool(state);
-    createa_descriptor_sets(state);
+    create_descriptor_sets(state);
 
     QueryPerformanceCounter(&state->last_time);
 
